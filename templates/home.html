@@ -1,0 +1,134 @@
+{% extends "layout.html" %}
+{% block content %}
+  <h1 class="cover-heading">Upload songs. Build smoother mixes.</h1>
+  <p class="lead">Add audio files to your local library. pyCrossfade identifies their beat structure in the background, then turns selected tracks into a playable mix.</p>
+  <form id="upload-form" class="upload-panel" enctype="multipart/form-data">
+    <label class="upload-label" for="audio-files">Choose audio files</label>
+    <input id="audio-files" name="file" type="file" accept="audio/*,.flac,.m4a,.mp3,.ogg,.wav" multiple required>
+    <button class="btn btn-lg btn-secondary" type="submit">Upload files</button>
+  </form>
+  <p id="upload-status" class="upload-status" role="status"></p>
+  {% if tracks or mixes %}<div class="workspace-grid">{% endif %}
+  {% if tracks %}
+    <section class="library library-pane" aria-labelledby="library-heading">
+      <h2 id="library-heading">Library <span>{{ total }}</span></h2>
+      <form id="mix-form" class="mix-panel library-form">
+      <div class="library-toolbar">
+        <label class="select-all-control" for="select-all-tracks">
+          <input id="select-all-tracks" type="checkbox">
+          <span>Select all ready songs</span>
+        </label>
+        <label class="horn-control" for="horn-rough-transitions">
+          <input id="horn-rough-transitions" type="checkbox">
+          <span>Air horn on guarded transitions</span>
+        </label>
+      </div>
+      <div class="library-scroll">
+      <ul id="track-list" class="track-list">
+        {% for track in tracks %}
+          <li class="track-library-item" data-track-row data-track-id="{{ track.id }}" data-track-status="{{ track.status }}">
+            <div class="track-summary">
+              <label>
+                <input type="checkbox" name="track" value="{{ track.id }}" {% if track.status != 'ready' %}disabled{% endif %}>
+                <strong>{{ track.original_filename }}</strong>
+              </label>
+              <small data-track-details>{{ track.status }}{% if track.bpm %} · {{ '%.0f'|format(track.bpm) }} BPM{% endif %}{% if track.key %} · {{ track.key }} {{ track.key_scale }}{% endif %}{% if track.duration_seconds %} · {{ '%.1f'|format(track.duration_seconds) }} sec{% endif %}</small>
+              <button class="delete-button" type="button" data-delete-track="{{ track.id }}" data-name="{{ track.original_filename }}" {% if track.status in ('queued', 'processing') %}disabled title="Analysis is still running"{% endif %} aria-label="Delete {{ track.original_filename }}">Delete</button>
+            </div>
+            {% if track.status == 'ready' %}
+              <section class="mix-player track-player" data-player data-player-name="{{ track.original_filename }}">
+                <button class="player-toggle track-player-toggle" type="button" data-play aria-label="Play {{ track.original_filename }}">▶</button>
+                <div class="track-waveform-wrap">
+                  <div class="waveform compact-waveform" data-waveform data-waveform-url="/api/tracks/{{ track.id }}/waveform" data-bpm="{{ track.bpm or '' }}" data-duration="{{ track.duration_seconds or '' }}">
+                    <div class="waveform-bars" data-waveform-bars aria-hidden="true">{% for _ in range(72) %}<span></span>{% endfor %}</div>
+                    <input class="player-progress" data-progress type="range" min="0" max="100" value="0" step="0.1" aria-label="Seek through {{ track.original_filename }}">
+                  </div>
+                  <div class="player-timing">
+                    <span data-current>0:00</span>
+                    <span>{% if track.duration_seconds %}{{ '%d:%02d'|format(track.duration_seconds // 60, track.duration_seconds % 60) }}{% else %}--:--{% endif %}</span>
+                  </div>
+                </div>
+                <audio preload="metadata" data-audio src="{{ url_for('media', path='uploads/' + track.stored_filename) }}"></audio>
+              </section>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      </div>
+      <div class="library-actions">
+        <span data-selection-count>0 selected</span>
+        <button class="btn btn-sm btn-outline-light" type="submit">Auto-arrange &amp; generate mix</button>
+      </div>
+      </form>
+      <p id="mix-status" class="upload-status" role="status"></p>
+      <section id="generation-progress" class="generation-progress" aria-live="polite" hidden>
+        <div class="generation-visual" aria-hidden="true">
+          {% for _ in range(12) %}<span></span>{% endfor %}
+        </div>
+        <div class="generation-copy">
+          <strong>Building your mix</strong>
+          <span data-generation-stage>Analyzing the best transitions…</span>
+        </div>
+        <span class="generation-elapsed" data-generation-elapsed>0:00</span>
+        <div class="generation-track" role="progressbar" aria-label="Mix generation in progress">
+          <span></span>
+        </div>
+      </section>
+    </section>
+  {% endif %}
+  {% if mixes %}
+    <section class="library mixes-pane" aria-labelledby="mixes-heading">
+      <h2 id="mixes-heading">Mixes</h2>
+      <div class="mixes-scroll">
+      <ul class="track-list">
+        {% for mix in mixes %}
+          <li class="mix-item" data-mix-row data-mix-id="{{ mix.id }}" data-mix-status="{{ mix.status }}">
+            {% if mix.status == 'ready' and mix.output_filename %}
+              <section class="mix-player" data-player>
+                <div class="player-heading">
+                  <button class="player-toggle" type="button" data-play aria-label="Play mix {{ mix.id }}">▶</button>
+                  <div>
+                    <strong>Mix #{{ mix.id }}</strong>
+                    <small>Beat-matched mix{% if mix.bpm %} · {{ '%.0f'|format(mix.bpm) }} BPM{% endif %}{% if mix.horn_rough_transitions %} · air horn enabled{% endif %}</small>
+                    <small class="mix-order">{% for item in mix.tracks|sort(attribute='position') %}{{ item.track.original_filename }}{% if not loop.last %} → {% endif %}{% endfor %}</small>
+                  </div>
+                  <a class="btn btn-sm btn-outline-light" href="/api/mixes/{{ mix.id }}/download">Download</a>
+                  <button class="delete-button" type="button" data-delete-mix="{{ mix.id }}" aria-label="Delete mix {{ mix.id }}">Delete</button>
+                </div>
+                <div class="waveform" data-waveform data-waveform-url="/api/mixes/{{ mix.id }}/waveform" data-bpm="{{ mix.bpm or '' }}" data-duration="{{ mix.duration_seconds or '' }}">
+                  <div class="waveform-bars" data-waveform-bars aria-hidden="true">
+                    {% for _ in range(72) %}<span></span>{% endfor %}
+                  </div>
+                  <input class="player-progress" data-progress type="range" min="0" max="100" value="0" step="0.1" aria-label="Seek through mix {{ mix.id }}">
+                </div>
+                <div class="player-timing">
+                  <span data-current>0:00</span>
+                  <span>{% if mix.duration_seconds %}{{ '%d:%02d'|format(mix.duration_seconds // 60, mix.duration_seconds % 60) }}{% else %}--:--{% endif %}</span>
+                </div>
+                <audio preload="metadata" data-audio src="{{ url_for('media', path='mixes/' + mix.output_filename) }}"></audio>
+              </section>
+            {% else %}
+              <div>
+                <strong>Mix #{{ mix.id }}</strong>
+                <small>{{ mix.status }}{% if mix.duration_seconds %} · {{ '%.1f'|format(mix.duration_seconds) }} sec{% endif %}</small>
+                {% if mix.status == 'failed' %}<small class="text-warning">{{ mix.generation_error }}</small>{% endif %}
+                {% if mix.status in ('queued', 'processing') %}
+                  <div class="inline-generation" role="status">
+                    <span class="mix-spinner" aria-hidden="true"></span>
+                    <span>{% if mix.status == 'queued' %}Waiting to start…{% else %}Matching beats and rendering audio…{% endif %}</span>
+                  </div>
+                {% endif %}
+                <button class="delete-button" type="button" data-delete-mix="{{ mix.id }}" {% if mix.status in ('queued', 'processing') %}disabled title="Generation is still running"{% endif %} aria-label="Delete mix {{ mix.id }}">Delete</button>
+              </div>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      </div>
+    </section>
+  {% endif %}
+  {% if tracks or mixes %}</div>{% endif %}
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', path='js/upload.js') }}"></script>
+{% endblock %}

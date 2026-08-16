@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FastAPI pyCrossfade{% if title %} · {{ title }}{% endif %}</title>
+    <link rel="icon" type="image/png" sizes="64x64" href="{{ url_for('static', path='images/pycrossfade-favicon.png') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', path='images/pycrossfade-apple-touch.png') }}">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/main.css') }}">
+  </head>
+  <body class="text-center">
+    <div class="cover-container d-flex h-100 p-3 mx-auto flex-column">
+      <header class="masthead mb-auto">
+        <div class="inner">
+          <a class="masthead-brand" href="{{ url_for('home') }}">
+            <img src="{{ url_for('static', path='images/pycrossfade-favicon.png') }}" alt="" width="30" height="30">
+            <span>pyCrossfade</span>
+          </a>
+          <nav class="nav nav-masthead justify-content-center">
+            <a class="nav-link active" href="{{ url_for('home') }}">Upload</a>
+          </nav>
+        </div>
+      </header>
+      <main role="main" class="inner cover">
+        {% block content %}{% endblock %}
+      </main>
+      <footer class="mastfoot mt-auto">
+        <div class="inner"><p>Beat-matched transitions for your music.</p></div>
+      </footer>
+    </div>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>
