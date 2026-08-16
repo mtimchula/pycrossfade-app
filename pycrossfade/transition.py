@@ -30,11 +30,11 @@ def crop_audio_and_dbeats(song, start_dbeat, end_dbeat):
 def time_stretch_gradually_in_downbeats(song, final_factor):
     # Since we are time stretching *in-between* down beats, dbeat array has to
     # include the +1 dbeat in itself
-    if final_factor == 1:
-        return audio
-
     audio = song.audio
     dbeats = song.get_downbeats()
+
+    if np.isclose(final_factor, 1.0):
+        return audio
 
     ts_factor_step_len = (final_factor - 1.0) / (len(dbeats) - 1)
 
@@ -49,6 +49,46 @@ def time_stretch_gradually_in_downbeats(song, final_factor):
 
     output = np.concatenate(time_stretched_audio_slices)
     return output
+
+
+def find_compatible_slave_start(master_dbeats, slave_dbeats, len_crossfade,
+                                max_search_seconds=64,
+                                max_tempo_ratio=1.5):
+    """Choose a stable entry point when a song's opening is tempo-incompatible.
+
+    Beat trackers can be uncertain during intros and may mark subdivisions as
+    downbeats. Starting a crossfade there can force an extreme time stretch.
+    This function retains the opening by default, but searches a bounded part
+    of the incoming track for a consecutive window with compatible bar timing
+    when the opening would exceed ``max_tempo_ratio``.
+    """
+    window_size = len_crossfade
+    if len(master_dbeats) < window_size + 1 or len(slave_dbeats) < window_size + 1:
+        return 0
+
+    master_intervals = np.diff(master_dbeats[-(window_size + 1):]).astype(float)
+    reference_interval = np.median(master_intervals)
+    opening_intervals = np.diff(slave_dbeats[:window_size + 1]).astype(float)
+    opening_ratio = np.median(opening_intervals) / reference_interval
+    if 1 / max_tempo_ratio <= opening_ratio <= max_tempo_ratio:
+        return 0
+
+    max_index = min(
+        len(slave_dbeats) - window_size - 1,
+        int(np.searchsorted(slave_dbeats, slave_dbeats[0] + max_search_seconds * 44100)),
+    )
+    best_index = 0
+    best_score = float('inf')
+    for index in range(max_index + 1):
+        slave_intervals = np.diff(slave_dbeats[index:index + window_size + 1]).astype(float)
+        ratios = slave_intervals / master_intervals
+        if np.any(ratios < 1 / max_tempo_ratio) or np.any(ratios > max_tempo_ratio):
+            continue
+        score = np.mean(np.abs(np.log(ratios))) + np.std(slave_intervals) / np.mean(slave_intervals)
+        if score < best_score:
+            best_score = score
+            best_index = index
+    return best_index
 
 def beatmatch_to_slave(master_song, slave_song):
     master_audio = master_song.audio
@@ -130,17 +170,43 @@ def beatmatch_to_slave(master_song, slave_song):
 
 
 
-def crossfade(master_song, slave_song, len_crossfade, len_time_stretch, return_audio=True):
+def crossfade(master_song, slave_song, len_crossfade, len_time_stretch,
+              return_audio=True, slave_start_dbeat=None,
+              overlay_rough_transition=False):
     # We are getting the required song partitions and their respective dbeats from SongPartition class
     master_p_audio = master_song.audio
     master_p_dbeats = master_song.get_downbeats()
     slave_p_audio = slave_song.audio
     slave_p_dbeats = slave_song.get_downbeats()
 
+    if slave_start_dbeat is None:
+        slave_start_dbeat = find_compatible_slave_start(
+            master_p_dbeats, slave_p_dbeats, len_crossfade
+        )
+
+    master_window = np.diff(master_p_dbeats[-(len_crossfade + 1):])
+    slave_window = np.diff(
+        slave_p_dbeats[slave_start_dbeat:slave_start_dbeat + len_crossfade + 1]
+    )
+    bar_ratios = master_window.astype(float) / slave_window.astype(float)
+    tempo_ratio = float(np.median(bar_ratios))
+    if not safe_tempo_window(bar_ratios):
+        return fallback_crossfade(
+            master_song,
+            slave_song,
+            len_crossfade,
+            slave_start_dbeat,
+            return_audio,
+            overlay_rough_transition,
+            tempo_ratio,
+        )
+
     # calculate the factor of time stretching according to first
     # downbeat difference of master and slaves in crossfade
     crossfade_master_first_dbeat_diff = master_p_dbeats[(-1 * len_crossfade) + 1] - master_p_dbeats[-1 * len_crossfade]
-    crossfade_slave_first_dbeat_diff = slave_p_dbeats[1] - slave_p_dbeats[0]
+    crossfade_slave_first_dbeat_diff = (
+        slave_p_dbeats[slave_start_dbeat + 1] - slave_p_dbeats[slave_start_dbeat]
+    )
     ts_final_factor = crossfade_master_first_dbeat_diff / crossfade_slave_first_dbeat_diff
 
     # -- TIME STRETCHING --
@@ -165,8 +231,8 @@ def crossfade(master_song, slave_song, len_crossfade, len_time_stretch, return_a
     master_fadeout_cropped_song = crop_audio_and_dbeats(master_fadeout_song,
                                                                           master_dbeats_start,
                                                                           master_dbeats_end)
-    slave_dbeats_start = 0
-    slave_dbeats_end = len_crossfade
+    slave_dbeats_start = slave_start_dbeat
+    slave_dbeats_end = slave_start_dbeat + len_crossfade
     slave_fadein_song = Song()
     slave_fadein_song.audio, slave_fadein_song.downbeats = slave_p_audio, slave_p_dbeats
     slave_fadein_cropped_song = crop_audio_and_dbeats(slave_fadein_song,
@@ -190,7 +256,7 @@ def crossfade(master_song, slave_song, len_crossfade, len_time_stretch, return_a
 
     crossfade_audio = new_slave_fadedin + new_master_fadedout
 
-    slave_fadein_end_idx = slave_p_dbeats[0] + len(new_slave_fadedin)
+    slave_fadein_end_idx = slave_p_dbeats[slave_start_dbeat] + len(new_slave_fadedin)
 
 
     if return_audio:
@@ -205,11 +271,13 @@ def crossfade(master_song, slave_song, len_crossfade, len_time_stretch, return_a
                 'crossfade_audio': crossfade_audio,
                 'len_crossfade': len_crossfade,
                 'len_time_stretch': len_time_stretch,
+                'slave_start_dbeat': slave_start_dbeat,
                 'ts_start_idx': ts_start_idx,
                 'slave_fadein_end_idx': slave_fadein_end_idx}
 
 
-def crossfade_multiple(song_list, len_crossfade, len_time_stretch):
+def crossfade_multiple(song_list, len_crossfade, len_time_stretch,
+                       overlay_rough_transitions=False):
     import numpy as np
     master_song = song_list[0]
     slave_song = song_list[1]
@@ -224,7 +292,11 @@ def crossfade_multiple(song_list, len_crossfade, len_time_stretch):
         master_song = song_list[i]
         slave_song = song_list[i + 1]
         cf_before = cf
-        cf = crossfade(master_song, slave_song, len_crossfade, len_time_stretch, return_audio=False)
+        cf = crossfade(
+            master_song, slave_song, len_crossfade, len_time_stretch,
+            return_audio=False,
+            overlay_rough_transition=overlay_rough_transitions,
+        )
 
         if i == 0:
             # if its the first song on the list
@@ -245,3 +317,105 @@ def crossfade_multiple(song_list, len_crossfade, len_time_stretch):
     slave_audio = slave_song.audio
     output_list.append(slave_audio[cf['slave_fadein_end_idx']:])
     return np.concatenate(output_list)
+
+
+def fallback_crossfade(master_song, slave_song, len_crossfade,
+                       slave_start_dbeat, return_audio,
+                       overlay_horn, tempo_ratio):
+    """Crossfade without stretching when beat annotations imply an unsafe ramp."""
+    master_dbeats = master_song.get_downbeats()
+    slave_dbeats = slave_song.get_downbeats()
+    master_intervals = np.diff(master_dbeats).astype(float)
+    stable_intervals = master_intervals[
+        (master_intervals >= .5 * master_song.sample_rate)
+        & (master_intervals <= 3 * master_song.sample_rate)
+    ]
+    if not stable_intervals.size:
+        stable_intervals = master_intervals
+    fade_length = int(np.median(stable_intervals) * len_crossfade)
+    slave_start = int(slave_dbeats[slave_start_dbeat])
+    fade_length = min(fade_length, len(master_song.audio), len(slave_song.audio) - slave_start)
+    master_start = find_outro_crossfade_start(
+        master_song.audio,
+        master_dbeats,
+        fade_length,
+        master_song.sample_rate,
+    )
+    master_end = master_start + fade_length
+
+    phase = np.linspace(0, np.pi / 2, fade_length, dtype=np.float32)
+    master_fade = master_song.audio[master_start:master_end] * np.cos(phase)
+    slave_fade = slave_song.audio[slave_start:slave_start + fade_length] * np.sin(phase)
+    transition_audio = master_fade + slave_fade
+    if overlay_horn:
+        horn = air_horn(min(fade_length, int(1.6 * master_song.sample_rate)), master_song.sample_rate)
+        horn_start = min(int(.35 * master_song.sample_rate), max(0, fade_length - len(horn)))
+        transition_audio[horn_start:horn_start + len(horn)] += horn
+
+    details = {
+        'time_stretch_audio': np.empty(0, dtype=transition_audio.dtype),
+        'crossfade_audio': transition_audio,
+        'len_crossfade': len_crossfade,
+        'len_time_stretch': 0,
+        'slave_start_dbeat': slave_start_dbeat,
+        'ts_start_idx': master_start,
+        'slave_fadein_end_idx': slave_start + fade_length,
+        'rough_transition': True,
+        'tempo_ratio': tempo_ratio,
+    }
+    if return_audio:
+        return np.concatenate([
+            master_song.audio[:master_start], transition_audio,
+            slave_song.audio[slave_start + fade_length:],
+        ])
+    return details
+
+
+def air_horn(length, sample_rate=44100):
+    """Generate a short, license-free DJ air-horn style accent."""
+    time = np.arange(length, dtype=np.float32) / sample_rate
+    attack = np.minimum(1.0, time / .025)
+    release = np.exp(-2.4 * time)
+    vibrato = 1.0 + .012 * np.sin(2 * np.pi * 7 * time)
+    horn = sum(
+        weight * np.sin(2 * np.pi * frequency * vibrato * time)
+        for frequency, weight in ((220, .55), (277.18, .30), (329.63, .18))
+    )
+    return (.20 * attack * release * np.tanh(1.8 * horn)).astype(np.float32)
+
+
+def safe_tempo_window(bar_ratios, minimum=0.80, maximum=1.25):
+    """Reject a transition if even one bar would create an audible speed jump."""
+    ratios = np.asarray(bar_ratios, dtype=float)
+    return bool(
+        ratios.size
+        and np.all(np.isfinite(ratios))
+        and np.all((ratios >= minimum) & (ratios <= maximum))
+    )
+
+
+def find_outro_crossfade_start(audio, downbeats, fade_length, sample_rate=44100,
+                               max_search_seconds=64, minimum_energy_ratio=.30):
+    """Choose the latest phrase that stays audible, avoiding silent file tails."""
+    audio = np.asarray(audio)
+    default_start = max(0, len(audio) - fade_length)
+    if not audio.size or fade_length <= 0:
+        return default_start
+    overall_rms = float(np.sqrt(np.mean(np.square(audio)) + 1e-12))
+    if overall_rms <= 1e-6:
+        return default_start
+
+    earliest = max(0, len(audio) - int(max_search_seconds * sample_rate))
+    candidates = []
+    for downbeat in np.asarray(downbeats, dtype=int):
+        end = downbeat + fade_length
+        if downbeat < earliest or end > len(audio):
+            continue
+        quarters = np.array_split(audio[downbeat:end], 4)
+        sustained_rms = min(
+            float(np.sqrt(np.mean(np.square(quarter)) + 1e-12))
+            for quarter in quarters if quarter.size
+        )
+        if sustained_rms >= overall_rms * minimum_energy_ratio:
+            candidates.append(int(downbeat))
+    return candidates[-1] if candidates else default_start

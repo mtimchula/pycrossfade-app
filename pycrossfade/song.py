@@ -1,12 +1,15 @@
 import numpy as np
-import madmom 
+from pathlib import Path
 from . import utils
-import os
+
+
+_beat_tracker = None
 
 
 class Song():
-    def __init__(self, filepath=None):
+    def __init__(self, filepath=None, cache_dir=None):
         self.filepath = filepath
+        self.cache_dir = cache_dir
         self.audio = None
         self.sample_rate = 44100
         self.beats = None
@@ -35,15 +38,14 @@ class Song():
         self.audio = utils.load_audio(self.filepath)
 
     def get_song_name_and_format(self):
-        # returns ../song_name.song_format -> song_name and song_format
-        return self.filepath.split('/')[-1].split('.')
+        """Return the filename stem and extension without breaking dotted titles."""
+        path = Path(self.filepath)
+        return path.stem, path.suffix.lstrip('.')
 
-    def annotate_beats(self, output_filepath):
-        downbeats_proc = madmom.features.DBNDownBeatTrackingProcessor(beats_per_bar=[4], fps=100)
-        activations = madmom.features.RNNDownBeatProcessor()(self.filepath)
-        beats = downbeats_proc(activations)
-        np.savetxt(output_filepath, beats, newline="\n")
-        return beats
+    def annotate_beats(self):
+        tracker = get_beat_tracker()
+        beats, downbeats = tracker(self.filepath)
+        return utils.make_beat_annotations(beats, downbeats)
 
     def get_downbeats(self):
         if self.downbeats is not None:
@@ -59,15 +61,24 @@ class Song():
         return self.downbeats
 
     def load_beats(self):
-        annotations_folder_name = 'pycrossfade_annotations'
-        utils.create_annotations_folder(annotations_folder_name)
+        cache_key = utils.content_hash(self.filepath)
+        cached_beats = utils.load_cached_beats(cache_key, self.cache_dir)
+        if cached_beats is not None:
+            self.beats = cached_beats
+            return
 
-        annotation_beats_path = utils.path_to_annotation_file(annotations_folder_name, self.song_name)
+        self.beats = self.annotate_beats()
+        utils.save_cached_beats(cache_key, self.beats, self.filepath, self.cache_dir)
 
-        if os.path.exists(annotation_beats_path):
-            self.beats = np.loadtxt(annotation_beats_path)
-        else:
-            # there is no beats annotation
-            self.annotate_beats(annotation_beats_path)
-            # log here
-            self.load_beats()
+
+def get_beat_tracker():
+    """Create the Beat This! model once per process.
+
+    CPU inference is the portable default. Applications that need GPU inference
+    can replace this factory with their own configured tracker.
+    """
+    global _beat_tracker
+    if _beat_tracker is None:
+        from beat_this.inference import File2Beats
+        _beat_tracker = File2Beats(checkpoint_path='final0', device='cpu', dbn=False)
+    return _beat_tracker
