@@ -24,7 +24,11 @@ async def upgrade_sqlite_schema():
                 "energy_start": "FLOAT", "energy_end": "FLOAT", "brightness": "FLOAT",
                 "waveform_peaks": "TEXT",
             },
-            "mixes": {"bpm": "FLOAT", "horn_rough_transitions": "BOOLEAN DEFAULT 0"},
+            "mixes": {
+                "bpm": "FLOAT",
+                "horn_rough_transitions": "BOOLEAN DEFAULT 0",
+                "transition_manifest": "TEXT",
+            },
         }
         for table, wanted_columns in additions.items():
             columns = {

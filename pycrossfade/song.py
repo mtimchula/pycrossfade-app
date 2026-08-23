@@ -7,7 +7,7 @@ _beat_tracker = None
 
 
 class Song():
-    def __init__(self, filepath=None, cache_dir=None):
+    def __init__(self, filepath=None, cache_dir=None, load_audio=True):
         self.filepath = filepath
         self.cache_dir = cache_dir
         self.audio = None
@@ -17,7 +17,8 @@ class Song():
 
         if filepath is not None:
             self.song_name, self.song_format = self.get_song_name_and_format()
-            self.load_song_audio()
+            if load_audio:
+                self.load_song_audio()
             self.load_beats()
 
     #def plot_downbeats(self, start_dbeat, end_dbeat, plot_name='', color='red'):

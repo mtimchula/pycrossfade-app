@@ -332,6 +332,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyrubberband" },
     { name = "scipy" },
+    { name = "soundfile" },
     { name = "sqlalchemy" },
     { name = "yodel" },
 ]
@@ -347,6 +348,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "pyrubberband", specifier = ">=0.4.0" },
     { name = "scipy", specifier = ">=1.15" },
+    { name = "soundfile", specifier = ">=0.13" },
     { name = "sqlalchemy", specifier = ">=2.0.51" },
     { name = "yodel", specifier = ">=0.3.0" },
 ]

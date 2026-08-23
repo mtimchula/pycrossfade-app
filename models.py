@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -52,6 +52,7 @@ class Mix(Base):
     bpm: Mapped[float | None] = mapped_column(Float, nullable=True)
     horn_rough_transitions: Mapped[bool] = mapped_column(Boolean, default=False)
     generation_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    transition_manifest: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

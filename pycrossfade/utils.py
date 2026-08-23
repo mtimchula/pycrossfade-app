@@ -19,15 +19,44 @@ def time_stretch(audio, factor, sample_rate=44100):
     return pyrb.time_stretch(audio, sample_rate, factor)
 
 
-def load_audio(filepath):
-    # returns loaded mono audio.
-    from essentia.standard import MonoLoader
-    return MonoLoader(filename=filepath)()
+def load_audio(filepath, mono=True):
+    """Load audio at 44.1 kHz, optionally preserving its channel layout."""
+    if mono:
+        from essentia.standard import MonoLoader
+        return np.asarray(MonoLoader(filename=filepath, sampleRate=44100)(), dtype=np.float32)
+
+    import math
+    import soundfile as sf
+    values, sample_rate = sf.read(filepath, dtype='float32', always_2d=True)
+    if sample_rate != 44100:
+        from scipy.signal import resample_poly
+        divisor = math.gcd(sample_rate, 44100)
+        values = resample_poly(
+            values,
+            44100 // divisor,
+            sample_rate // divisor,
+            axis=0,
+        ).astype(np.float32)
+    if values.ndim != 2:
+        raise ValueError(f'Unsupported decoded audio shape: {values.shape}.')
+    return values
 
 
 def save_audio(audio, filename, file_format='wav', bit_rate=320):
+    values = np.asarray(audio, dtype=np.float32)
+    if not values.size or not np.isfinite(values).all():
+        raise ValueError('Audio must be non-empty and finite before writing.')
+    if values.ndim not in (1, 2):
+        raise ValueError(f'Unsupported output audio shape: {values.shape}.')
+    if file_format == 'wav' or Path(filename).suffix.lower() == '.wav':
+        from scipy.io import wavfile
+        encoded = np.round(np.clip(values, -1.0, 1.0) * 32767).astype(np.int16)
+        wavfile.write(filename, 44100, encoded)
+        return
+    if values.ndim != 1:
+        raise ValueError('Non-WAV output currently supports mono audio only.')
     from essentia.standard import MonoWriter
-    MonoWriter(filename=filename, bitrate=bit_rate, format=file_format)(audio)
+    MonoWriter(filename=filename, bitrate=bit_rate, format=file_format)(values)
 
 
 def content_hash(filepath, chunk_size=1024 * 1024):
@@ -153,14 +182,15 @@ def _atomic_write_json(destination, value):
 
 
 def linear_fade_volume(audio, start_volume=0.0, end_volume=1.0):
-    import numpy as np
-
     if start_volume == end_volume:
         return audio
 
-    length = audio.size
-    profile = np.sqrt(np.linspace(start_volume, end_volume, length))
-    return audio * profile
+    values = np.asarray(audio)
+    length = len(values)
+    profile = np.sqrt(np.linspace(start_volume, end_volume, length, dtype=np.float32))
+    if values.ndim == 2:
+        profile = profile[:, np.newaxis]
+    return values * profile
 
 
 def linear_fade_filter(audio, filter_type, start_volume=0.0, end_volume=1.0):
@@ -179,10 +209,11 @@ def linear_fade_filter(audio, filter_type, start_volume=0.0, end_volume=1.0):
     NUM_STEPS = 20 if start_volume != end_volume else 1
 
     bquad_filter = Biquad()
-    length = audio.size  # Assumes mono audio
+    values = np.asarray(audio)
+    length = len(values)
 
     profile = np.linspace(start_volume, end_volume, NUM_STEPS)
-    output_audio = np.zeros(audio.shape)
+    output_audio = np.zeros(values.shape, dtype=np.float32)
 
     for i in range(NUM_STEPS):
         start_idx = int((i / float(NUM_STEPS)) * length)
@@ -198,6 +229,13 @@ def linear_fade_filter(audio, filter_type, start_volume=0.0, end_volume=1.0):
         a = bquad_filter._a_coeffs
         a[
             0] = 1.0  # Normalizing the coefficients is already done in the yodel object, but a[0] is never reset to 1.0 after division!
-        output_audio[start_idx: end_idx] = lfilter(b, a, audio[start_idx: end_idx]).astype('float32')
+        chunk = values[start_idx:end_idx]
+        if chunk.ndim == 1:
+            output_audio[start_idx:end_idx] = lfilter(b, a, chunk).astype('float32')
+        else:
+            for channel in range(chunk.shape[1]):
+                output_audio[start_idx:end_idx, channel] = lfilter(
+                    b, a, chunk[:, channel]
+                ).astype('float32')
 
     return output_audio
