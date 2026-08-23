@@ -51,4 +51,5 @@ class MixResponse(BaseModel):
     bpm: float | None
     horn_rough_transitions: bool
     generation_error: str | None
+    transition_manifest: list[dict] | None
     created_at: datetime
